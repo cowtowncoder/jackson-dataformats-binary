@@ -5,6 +5,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+import com.fasterxml.jackson.dataformat.avro.AvroType;
+import org.apache.avro.LogicalTypes;
 import org.apache.avro.Schema;
 import org.apache.avro.Schema.Type;
 import org.apache.avro.reflect.AvroMeta;
@@ -36,9 +38,9 @@ public class RecordVisitor
     protected final boolean _overridden;
 
     protected Schema _avroSchema;
-    
+
     protected List<Schema.Field> _fields = new ArrayList<Schema.Field>();
-    
+
     public RecordVisitor(SerializerProvider p, JavaType type, DefinedSchemas schemas)
     {
         super(p);
@@ -75,7 +77,7 @@ public class RecordVisitor
         }
         schemas.addSchema(type, _avroSchema);
     }
-    
+
     @Override
     public Schema builtAvroSchema() {
         if (!_overridden) {
@@ -90,7 +92,7 @@ public class RecordVisitor
     /* JsonObjectFormatVisitor implementation
     /**********************************************************
      */
-    
+
     @Override
     public void property(BeanProperty writer) throws JsonMappingException
     {
@@ -142,7 +144,7 @@ public class RecordVisitor
     /* Internal methods
     /**********************************************************************
      */
-    
+
     protected Schema.Field schemaFieldForWriter(BeanProperty prop, boolean optional) throws JsonMappingException
     {
         Schema writerSchema;
@@ -152,31 +154,81 @@ public class RecordVisitor
             Schema.Parser parser = new Schema.Parser();
             writerSchema = parser.parse(schemaOverride.value());
         } else {
-            AvroFixedSize fixedSize = prop.getAnnotation(AvroFixedSize.class);
-            if (fixedSize != null) {
-                writerSchema = Schema.createFixed(fixedSize.typeName(), null, fixedSize.typeNamespace(), fixedSize.size());
-            } else {
-                JsonSerializer<?> ser = null;
+            AvroType type = prop.getAnnotation(AvroType.class);
 
-                // 23-Nov-2012, tatu: Ideally shouldn't need to do this but...
-                if (prop instanceof BeanPropertyWriter) {
-                    BeanPropertyWriter bpw = (BeanPropertyWriter) prop;
-                    ser = bpw.getSerializer();
-                    /*
-                     * 2-Mar-2017, bryan: AvroEncode annotation expects to have the schema used directly
-                     */
-                    optional = optional && !(ser instanceof CustomEncodingSerializer); // Don't modify schema
+            if(null != type) {
+                if(type.schemaType() == Type.FIXED) {
+                    writerSchema = Schema.createFixed(type.typeName(),
+                        null,
+                        type.typeNamespace(),
+                        type.fixedSize()
+                    );
+                } else {
+                    writerSchema = Schema.create(type.schemaType());
                 }
-                final SerializerProvider prov = getProvider();
-                if (ser == null) {
-                    if (prov == null) {
-                        throw JsonMappingException.from(prov, "SerializerProvider missing for RecordVisitor");
+                switch (type.logicalType()) {
+                    case NONE:
+                        break;
+                    case DATE:
+                        writerSchema = LogicalTypes.date()
+                            .addToSchema(writerSchema);
+                        break;
+                    case UUID:
+                        writerSchema = LogicalTypes.uuid()
+                            .addToSchema(writerSchema);
+                        break;
+                    case DECIMAL:
+                        writerSchema = LogicalTypes.decimal(type.precision(), type.scale())
+                            .addToSchema(writerSchema);
+                        break;
+                    case TIME_MICROSECOND:
+                        writerSchema = LogicalTypes.timeMicros()
+                            .addToSchema(writerSchema);
+                        break;
+                    case TIME_MILLISECOND:
+                        writerSchema = LogicalTypes.timeMillis()
+                            .addToSchema(writerSchema);
+                        break;
+                    case TIMESTAMP_MICROSECOND:
+                        writerSchema = LogicalTypes.timestampMicros()
+                            .addToSchema(writerSchema);
+                        break;
+                    case TIMESTAMP_MILLISECOND:
+                        writerSchema = LogicalTypes.timestampMillis()
+                            .addToSchema(writerSchema);
+                        break;
+                    default:
+                        throw new UnsupportedOperationException(
+                            String.format("%s is not a supported logical type.", type.logicalType())
+                        );
+                }
+            } else {
+                AvroFixedSize fixedSize = prop.getAnnotation(AvroFixedSize.class);
+                if (fixedSize != null) {
+                    writerSchema = Schema.createFixed(fixedSize.typeName(), null, fixedSize.typeNamespace(), fixedSize.size());
+                } else {
+                    JsonSerializer<?> ser = null;
+
+                    // 23-Nov-2012, tatu: Ideally shouldn't need to do this but...
+                    if (prop instanceof BeanPropertyWriter) {
+                        BeanPropertyWriter bpw = (BeanPropertyWriter) prop;
+                        ser = bpw.getSerializer();
+                        /*
+                         * 2-Mar-2017, bryan: AvroEncode annotation expects to have the schema used directly
+                         */
+                        optional = optional && !(ser instanceof CustomEncodingSerializer); // Don't modify schema
                     }
-                    ser = prov.findValueSerializer(prop.getType(), prop);
+                    final SerializerProvider prov = getProvider();
+                    if (ser == null) {
+                        if (prov == null) {
+                            throw JsonMappingException.from(prov, "SerializerProvider missing for RecordVisitor");
+                        }
+                        ser = prov.findValueSerializer(prop.getType(), prop);
+                    }
+                    VisitorFormatWrapperImpl visitor = new VisitorFormatWrapperImpl(_schemas, prov);
+                    ser.acceptJsonFormatVisitor(visitor, prop.getType());
+                    writerSchema = visitor.getAvroSchema();
                 }
-                VisitorFormatWrapperImpl visitor = new VisitorFormatWrapperImpl(_schemas, prov);
-                ser.acceptJsonFormatVisitor(visitor, prop.getType());
-                writerSchema = visitor.getAvroSchema();
             }
 
             /* 23-Nov-2012, tatu: Actually let's also assume that primitive type values

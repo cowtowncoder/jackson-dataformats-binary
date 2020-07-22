@@ -1,20 +1,21 @@
 package com.fasterxml.jackson.dataformat.avro.ser;
 
-import java.io.IOException;
-import java.math.BigDecimal;
-import java.math.BigInteger;
-import java.util.ArrayList;
-
+import org.apache.avro.Conversions;
 import org.apache.avro.Schema;
 import org.apache.avro.Schema.Type;
 import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericDatumWriter;
 import org.apache.avro.io.Encoder;
 
+import java.io.IOException;
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.util.ArrayList;
+
 /**
  * Need to sub-class to prevent encoder from crapping on writing an optional
  * Enum value (see [dataformat-avro#12])
- * 
+ *
  * @since 2.5
  */
 public class NonBSGenericDatumWriter<D>
@@ -25,7 +26,9 @@ public class NonBSGenericDatumWriter<D>
     private final static Class<?> CLS_STRING = String.class;
     private final static Class<?> CLS_BIG_DECIMAL = BigDecimal.class;
     private final static Class<?> CLS_BIG_INTEGER = BigInteger.class;
-    
+    private final static Conversions.DecimalConversion DECIMAL_CONVERSION = new Conversions.DecimalConversion();
+
+
     public NonBSGenericDatumWriter(Schema root) {
 	super(root);
     }
@@ -56,6 +59,10 @@ public class NonBSGenericDatumWriter<D>
             break;
         case ENUM:
             super.writeWithoutConversion(schema, GENERIC_DATA.createEnum(datum.toString(), schema), out);
+            return;
+        case FIXED:
+        case BYTES:
+            super.writeWithoutConversion(schema, datum, out);
             return;
         case INT:
             if (datum.getClass() == CLS_STRING) {
